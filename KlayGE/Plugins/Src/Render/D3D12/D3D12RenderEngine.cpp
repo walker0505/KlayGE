@@ -70,8 +70,8 @@ namespace KlayGE
 	// ¹¹Ôìº¯Êý
 	/////////////////////////////////////////////////////////////////////////////////
 	D3D12RenderEngine::D3D12RenderEngine()
-		: last_engine_type_(ET_Render), inv_timestamp_freq_(0),
-			render_cmd_fence_val_(0), compute_cmd_fence_val_(0), copy_cmd_fence_val_(0),
+		: inv_timestamp_freq_(0),
+			render_cmd_fence_val_(0), copy_cmd_fence_val_(0),
 			res_cmd_fence_val_(0)
 	{
 		UINT dxgi_factory_flags = 0;
@@ -137,7 +137,6 @@ namespace KlayGE
 		RenderEngine::EndFrame();
 
 		this->ResetRenderCmd();
-		this->ResetComputeCmd();
 		this->ResetCopyCmd();
 		this->ClearPSOCache();
 	}
@@ -188,21 +187,6 @@ namespace KlayGE
 	ID3D12GraphicsCommandList* D3D12RenderEngine::D3DRenderCmdList() const
 	{
 		return d3d_render_cmd_list_.get();
-	}
-
-	ID3D12CommandQueue* D3D12RenderEngine::D3DComputeCmdQueue() const
-	{
-		return d3d_compute_cmd_queue_.get();
-	}
-
-	ID3D12CommandAllocator* D3D12RenderEngine::D3DComputeCmdAllocator() const
-	{
-		return d3d_compute_cmd_allocator_.get();
-	}
-
-	ID3D12GraphicsCommandList* D3D12RenderEngine::D3DComputeCmdList() const
-	{
-		return d3d_compute_cmd_list_.get();
 	}
 
 	ID3D12CommandQueue* D3D12RenderEngine::D3DCopyCmdQueue() const
@@ -322,21 +306,6 @@ namespace KlayGE
 		queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 		queue_desc.NodeMask = 0;
 
-		ID3D12CommandQueue* d3d_compute_cmd_queue;
-		TIFHR(d3d_device_->CreateCommandQueue(&queue_desc,
-			IID_ID3D12CommandQueue, reinterpret_cast<void**>(&d3d_compute_cmd_queue)));
-		d3d_compute_cmd_queue_ = MakeCOMPtr(d3d_compute_cmd_queue);
-
-		ID3D12CommandAllocator* d3d_compute_cmd_allocator;
-		TIFHR(d3d_device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE,
-			IID_ID3D12CommandAllocator, reinterpret_cast<void**>(&d3d_compute_cmd_allocator)));
-		d3d_compute_cmd_allocator_ = MakeCOMPtr(d3d_compute_cmd_allocator);
-
-		ID3D12GraphicsCommandList* d3d_compute_cmd_list;
-		TIFHR(d3d_device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, d3d_compute_cmd_allocator_.get(), nullptr,
-			IID_ID3D12GraphicsCommandList, reinterpret_cast<void**>(&d3d_compute_cmd_list)));
-		d3d_compute_cmd_list_ = MakeCOMPtr(d3d_compute_cmd_list);
-
 		queue_desc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
 
 		ID3D12CommandQueue* d3d_copy_cmd_queue;
@@ -427,7 +396,6 @@ namespace KlayGE
 		res_cmd_fence_ = rf.MakeFence();
 
 		render_cmd_fence_ = rf.MakeFence();
-		compute_cmd_fence_ = rf.MakeFence();
 		copy_cmd_fence_ = rf.MakeFence();
 
 		this->FillRenderDeviceCaps();
@@ -464,13 +432,6 @@ namespace KlayGE
 		d3d_render_cmd_queue_->ExecuteCommandLists(static_cast<uint32_t>(std::size(cmd_lists)), cmd_lists);
 	}
 
-	void D3D12RenderEngine::CommitComputeCmd()
-	{
-		TIFHR(d3d_compute_cmd_list_->Close());
-		ID3D12CommandList* cmd_lists[] = { d3d_compute_cmd_list_.get() };
-		d3d_compute_cmd_queue_->ExecuteCommandLists(static_cast<uint32_t>(std::size(cmd_lists)), cmd_lists);
-	}
-
 	void D3D12RenderEngine::CommitCopyCmd()
 	{
 		TIFHR(d3d_copy_cmd_list_->Close());
@@ -484,12 +445,6 @@ namespace KlayGE
 		render_cmd_fence_->Wait(render_cmd_fence_val_);
 	}
 
-	void D3D12RenderEngine::SyncComputeCmd()
-	{
-		compute_cmd_fence_val_ = checked_cast<D3D12Fence*>(compute_cmd_fence_.get())->Signal(d3d_compute_cmd_queue_.get());
-		compute_cmd_fence_->Wait(compute_cmd_fence_val_);
-	}
-
 	void D3D12RenderEngine::SyncCopyCmd()
 	{
 		copy_cmd_fence_val_ = checked_cast<D3D12Fence*>(copy_cmd_fence_.get())->Signal(d3d_copy_cmd_queue_.get());
@@ -500,12 +455,6 @@ namespace KlayGE
 	{
 		d3d_render_cmd_allocator_->Reset();
 		d3d_render_cmd_list_->Reset(d3d_render_cmd_allocator_.get(), nullptr);
-	}
-
-	void D3D12RenderEngine::ResetComputeCmd()
-	{
-		d3d_compute_cmd_allocator_->Reset();
-		d3d_compute_cmd_list_->Reset(d3d_compute_cmd_allocator_.get(), nullptr);
 	}
 
 	void D3D12RenderEngine::ResetCopyCmd()
@@ -757,8 +706,8 @@ namespace KlayGE
 
 		ID3D12PipelineStatePtr pso = rso.RetrieveComputePSO(so);
 
-		d3d_compute_cmd_list_->SetPipelineState(pso.get());
-		d3d_compute_cmd_list_->SetComputeRootSignature(so->RootSignature().get());
+		d3d_render_cmd_list_->SetPipelineState(pso.get());
+		d3d_render_cmd_list_->SetComputeRootSignature(so->RootSignature().get());
 
 		ShaderObject::ShaderType const st = ShaderObject::ST_ComputeShader;
 		size_t const num_handle = so->SRVs(st).size() + so->UAVs(st).size();
@@ -804,7 +753,7 @@ namespace KlayGE
 
 		if (num_heaps > 0)
 		{
-			d3d_compute_cmd_list_->SetDescriptorHeaps(num_heaps, &heaps[0]);
+			d3d_render_cmd_list_->SetDescriptorHeaps(num_heaps, &heaps[0]);
 		}
 
 		uint32_t root_param_index = 0;
@@ -815,13 +764,13 @@ namespace KlayGE
 				ID3D12ResourcePtr const & buff = checked_cast<D3D12GraphicsBuffer*>(so->CBuffers(st)[j])->D3DResource();
 				if (buff)
 				{
-					d3d_compute_cmd_list_->SetComputeRootConstantBufferView(root_param_index, buff->GetGPUVirtualAddress());
+					d3d_render_cmd_list_->SetComputeRootConstantBufferView(root_param_index, buff->GetGPUVirtualAddress());
 
 					++ root_param_index;
 				}
 				else
 				{
-					d3d_compute_cmd_list_->SetComputeRootConstantBufferView(root_param_index, 0);
+					d3d_render_cmd_list_->SetComputeRootConstantBufferView(root_param_index, 0);
 				}
 			}
 		}
@@ -834,7 +783,7 @@ namespace KlayGE
 
 			if (!so->SRVs(st).empty())
 			{
-				d3d_compute_cmd_list_->SetComputeRootDescriptorTable(root_param_index, gpu_cbv_srv_uav_handle);
+				d3d_render_cmd_list_->SetComputeRootDescriptorTable(root_param_index, gpu_cbv_srv_uav_handle);
 
 				for (uint32_t j = 0; j < so->SRVs(st).size(); ++ j)
 				{
@@ -849,7 +798,7 @@ namespace KlayGE
 			}
 			if (!so->UAVs(st).empty())
 			{
-				d3d_compute_cmd_list_->SetComputeRootDescriptorTable(root_param_index, gpu_cbv_srv_uav_handle);
+				d3d_render_cmd_list_->SetComputeRootDescriptorTable(root_param_index, gpu_cbv_srv_uav_handle);
 
 				for (uint32_t j = 0; j < so->UAVs(st).size(); ++ j)
 				{
@@ -872,7 +821,7 @@ namespace KlayGE
 
 			if (!so->Samplers(st).empty())
 			{
-				d3d_compute_cmd_list_->SetComputeRootDescriptorTable(root_param_index, gpu_sampler_handle);
+				d3d_render_cmd_list_->SetComputeRootDescriptorTable(root_param_index, gpu_sampler_handle);
 
 				gpu_sampler_handle.ptr += sampler_desc_size * so->Samplers(st).size();
 
@@ -885,11 +834,6 @@ namespace KlayGE
 	/////////////////////////////////////////////////////////////////////////////////
 	void D3D12RenderEngine::DoRender(RenderEffect const & effect, RenderTechnique const & tech, RenderLayout const & rl)
 	{
-		if (last_engine_type_ != ET_Render)
-		{
-			this->ForceCPUGPUSync();
-		}
-
 		D3D12FrameBuffer& fb = *checked_cast<D3D12FrameBuffer*>(this->CurFrameBuffer().get());
 		fb.SetRenderTargets();
 		fb.BindBarrier();
@@ -1108,18 +1052,11 @@ namespace KlayGE
 		}
 
 		num_draws_just_called_ += num_passes;
-
-		last_engine_type_ = ET_Render;
 	}
 
 	void D3D12RenderEngine::DoDispatch(RenderEffect const & effect, RenderTechnique const & tech,
 		uint32_t tgx, uint32_t tgy, uint32_t tgz)
 	{
-		if (last_engine_type_ != ET_Compute)
-		{
-			this->ForceCPUGPUSync();
-		}
-
 		uint32_t const num_passes = tech.NumPasses();
 		for (uint32_t i = 0; i < num_passes; ++ i)
 		{
@@ -1127,22 +1064,16 @@ namespace KlayGE
 
 			pass.Bind(effect);
 			this->UpdateComputePSO(effect, pass);
-			d3d_compute_cmd_list_->Dispatch(tgx, tgy, tgz);
+			d3d_render_cmd_list_->Dispatch(tgx, tgy, tgz);
 			pass.Unbind(effect);
 		}
 
 		num_dispatches_just_called_ += num_passes;
-		last_engine_type_ = ET_Compute;
 	}
 
 	void D3D12RenderEngine::DoDispatchIndirect(RenderEffect const & effect, RenderTechnique const & tech,
 		GraphicsBufferPtr const & buff_args, uint32_t offset)
 	{
-		if (last_engine_type_ != ET_Compute)
-		{
-			this->ForceCPUGPUSync();
-		}
-
 		uint32_t const num_passes = tech.NumPasses();
 		for (uint32_t i = 0; i < num_passes; ++ i)
 		{
@@ -1151,28 +1082,23 @@ namespace KlayGE
 			pass.Bind(effect);
 			this->UpdateComputePSO(effect, pass);
 			// TODO: ExecuteIndirect's first 2 parameters can't be right
-			d3d_compute_cmd_list_->ExecuteIndirect(nullptr, 0, checked_cast<D3D12GraphicsBuffer*>(buff_args.get())->D3DResource().get(),
+			d3d_render_cmd_list_->ExecuteIndirect(nullptr, 0, checked_cast<D3D12GraphicsBuffer*>(buff_args.get())->D3DResource().get(),
 				offset, nullptr, 0);
 			pass.Unbind(effect);
 		}
 
 		num_dispatches_just_called_ += num_passes;
-		last_engine_type_ = ET_Compute;
 	}
 
 	void D3D12RenderEngine::ForceFlush()
 	{
 		TIFHR(d3d_render_cmd_list_->Close());
-		TIFHR(d3d_compute_cmd_list_->Close());
 		TIFHR(d3d_copy_cmd_list_->Close());
 
 		ID3D12CommandList* cmd_lists[1];
 
 		cmd_lists[0] = d3d_render_cmd_list_.get();
 		d3d_render_cmd_queue_->ExecuteCommandLists(static_cast<uint32_t>(std::size(cmd_lists)), cmd_lists);
-
-		cmd_lists[0] = d3d_compute_cmd_list_.get();
-		d3d_compute_cmd_queue_->ExecuteCommandLists(static_cast<uint32_t>(std::size(cmd_lists)), cmd_lists);
 
 		cmd_lists[0] = d3d_copy_cmd_list_.get();
 		d3d_copy_cmd_queue_->ExecuteCommandLists(static_cast<uint32_t>(std::size(cmd_lists)), cmd_lists);
@@ -1181,13 +1107,10 @@ namespace KlayGE
 	void D3D12RenderEngine::ForceCPUGPUSync()
 	{
 		this->CommitRenderCmd();
-		this->CommitComputeCmd();
 		this->CommitCopyCmd();
 		this->SyncRenderCmd();
-		this->SyncComputeCmd();
 		this->SyncCopyCmd();
 		this->ResetRenderCmd();
-		this->ResetComputeCmd();
 		this->ResetCopyCmd();
 
 		this->ClearPSOCache();
@@ -1219,7 +1142,6 @@ namespace KlayGE
 
 		res_cmd_fence_.reset();
 		render_cmd_fence_.reset();
-		compute_cmd_fence_.reset();
 		copy_cmd_fence_.reset();
 
 		this->ClearPSOCache();
@@ -1242,9 +1164,6 @@ namespace KlayGE
 		d3d_render_cmd_list_.reset();
 		d3d_render_cmd_allocator_.reset();
 		d3d_render_cmd_queue_.reset();
-		d3d_compute_cmd_list_.reset();
-		d3d_compute_cmd_allocator_.reset();
-		d3d_compute_cmd_queue_.reset();
 		d3d_copy_cmd_list_.reset();
 		d3d_copy_cmd_allocator_.reset();
 		d3d_copy_cmd_queue_.reset();
@@ -1636,6 +1555,7 @@ namespace KlayGE
 				D3D12RenderTargetRenderView* rtv = checked_cast<D3D12RenderTargetRenderView*>(
 					(0 == eye) ? win->D3DBackBufferRTV().get() : win->D3DBackBufferRightEyeRTV().get());
 
+				OutputDebugStringA("D3D12RenderEngine::StereoscopicForLCDShutter");
 				D3D12_CPU_DESCRIPTOR_HANDLE rt_handle = rtv->D3DRenderTargetView()->Handle();
 				d3d_render_cmd_list_->OMSetRenderTargets(1, &rt_handle, false, nullptr);
 
