@@ -455,6 +455,12 @@ namespace KlayGE
 	{
 		d3d_render_cmd_allocator_->Reset();
 		d3d_render_cmd_list_->Reset(d3d_render_cmd_allocator_.get(), nullptr);
+
+		auto fb = checked_cast<D3D12FrameBuffer*>(this->CurFrameBuffer().get());
+		if (fb)
+		{
+			fb->SetRenderTargets();
+		}
 	}
 
 	void D3D12RenderEngine::ResetCopyCmd()
@@ -529,10 +535,10 @@ namespace KlayGE
 		D3D12ShaderObjectPtr const & so = checked_pointer_cast<D3D12ShaderObject>(pass.GetShaderObject(effect));
 		D3D12RenderStateObject const & rso = *checked_pointer_cast<D3D12RenderStateObject>(pass.GetRenderStateObject());
 
-		ID3D12PipelineStatePtr pso = rso.RetrieveGraphicsPSO(rl, so, this->CurFrameBuffer(), tech.HasTessellation());
+		auto pso = rso.RetrieveGraphicsPSO(rl, so, this->CurFrameBuffer(), tech.HasTessellation());
 
-		d3d_render_cmd_list_->SetPipelineState(pso.get());
-		d3d_render_cmd_list_->SetGraphicsRootSignature(so->RootSignature().get());
+		d3d_render_cmd_list_->SetPipelineState(pso);
+		d3d_render_cmd_list_->SetGraphicsRootSignature(so->RootSignature());
 
 		if (pass.GetRenderStateObject()->GetRasterizerStateDesc().scissor_enable)
 		{
@@ -560,7 +566,7 @@ namespace KlayGE
 		std::array<ID3D12DescriptorHeap*, 2> heaps;
 		uint32_t num_heaps = 0;
 		ID3D12DescriptorHeapPtr cbv_srv_uav_heap;
-		ID3D12DescriptorHeapPtr sampler_heap = so->SamplerHeap();
+		auto sampler_heap = so->SamplerHeap();
 		if (num_handle > 0)
 		{
 			size_t hash_val = 0;
@@ -600,7 +606,7 @@ namespace KlayGE
 		}
 		if (sampler_heap)
 		{
-			heaps[num_heaps] = sampler_heap.get();
+			heaps[num_heaps] = sampler_heap;
 			++ num_heaps;
 		}
 
@@ -704,10 +710,10 @@ namespace KlayGE
 		D3D12ShaderObjectPtr const & so = checked_pointer_cast<D3D12ShaderObject>(pass.GetShaderObject(effect));
 		D3D12RenderStateObject const & rso = *checked_pointer_cast<D3D12RenderStateObject>(pass.GetRenderStateObject());
 
-		ID3D12PipelineStatePtr pso = rso.RetrieveComputePSO(so);
+		auto pso = rso.RetrieveComputePSO(so);
 
-		d3d_render_cmd_list_->SetPipelineState(pso.get());
-		d3d_render_cmd_list_->SetComputeRootSignature(so->RootSignature().get());
+		d3d_render_cmd_list_->SetPipelineState(pso);
+		d3d_render_cmd_list_->SetComputeRootSignature(so->RootSignature());
 
 		ShaderObject::ShaderType const st = ShaderObject::ST_ComputeShader;
 		size_t const num_handle = so->SRVs(st).size() + so->UAVs(st).size();
@@ -715,7 +721,7 @@ namespace KlayGE
 		std::array<ID3D12DescriptorHeap*, 2> heaps;
 		uint32_t num_heaps = 0;
 		ID3D12DescriptorHeapPtr cbv_srv_uav_heap;
-		ID3D12DescriptorHeapPtr sampler_heap = so->SamplerHeap();
+		auto sampler_heap = so->SamplerHeap();
 		if (num_handle > 0)
 		{
 			size_t hash_val = 0;
@@ -747,7 +753,7 @@ namespace KlayGE
 		}
 		if (sampler_heap)
 		{
-			heaps[num_heaps] = sampler_heap.get();
+			heaps[num_heaps] = sampler_heap;
 			++ num_heaps;
 		}
 
@@ -835,7 +841,6 @@ namespace KlayGE
 	void D3D12RenderEngine::DoRender(RenderEffect const & effect, RenderTechnique const & tech, RenderLayout const & rl)
 	{
 		D3D12FrameBuffer& fb = *checked_cast<D3D12FrameBuffer*>(this->CurFrameBuffer().get());
-		fb.SetRenderTargets();
 		fb.BindBarrier();
 
 		std::vector<D3D12_RESOURCE_BARRIER> barriers;
@@ -1892,12 +1897,10 @@ namespace KlayGE
 				error->Release();
 			}
 			
-			return root_signatures_.emplace(hash_val, MakeCOMPtr(rs)).first->second;
+			iter = root_signatures_.emplace(hash_val, MakeCOMPtr(rs)).first;
 		}
-		else
-		{
-			return iter->second;
-		}
+
+		return iter->second;
 	}
 
 	ID3D12PipelineStatePtr const & D3D12RenderEngine::CreateRenderPSO(D3D12_GRAPHICS_PIPELINE_STATE_DESC const & desc)
@@ -1911,12 +1914,10 @@ namespace KlayGE
 		{
 			ID3D12PipelineState* d3d_pso;
 			TIFHR(d3d_device_->CreateGraphicsPipelineState(&desc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&d3d_pso)));
-			return graphics_psos_.emplace(hash_val, MakeCOMPtr(d3d_pso)).first->second;
+			iter = graphics_psos_.emplace(hash_val, MakeCOMPtr(d3d_pso)).first;
 		}
-		else
-		{
-			return iter->second;
-		}
+
+		return iter->second;
 	}
 
 	ID3D12PipelineStatePtr const & D3D12RenderEngine::CreateComputePSO(D3D12_COMPUTE_PIPELINE_STATE_DESC const & desc)
@@ -1930,12 +1931,10 @@ namespace KlayGE
 		{
 			ID3D12PipelineState* d3d_pso;
 			TIFHR(d3d_device_->CreateComputePipelineState(&desc, IID_ID3D12PipelineState, reinterpret_cast<void**>(&d3d_pso)));
-			return compute_psos_.emplace(hash_val, MakeCOMPtr(d3d_pso)).first->second;
+			iter = compute_psos_.emplace(hash_val, MakeCOMPtr(d3d_pso)).first;
 		}
-		else
-		{
-			return iter->second;
-		}
+
+		return iter->second;
 	}
 
 	ID3D12DescriptorHeapPtr D3D12RenderEngine::CreateDynamicCBVSRVUAVDescriptorHeap(uint32_t num)
